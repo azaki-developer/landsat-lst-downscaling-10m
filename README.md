@@ -31,7 +31,7 @@ If you use this code in your research, please cite:
   title        = {Landsat LST Downscaling Framework (10m): 
                   Multi-Algorithm Implementation in Google Earth Engine},
   month        = feb,
-  year         = 2025,
+  year         = 2026,
   publisher    = {Zenodo},
   version      = {1.0.0},
   doi          = {10.5281/zenodo.18526672},
