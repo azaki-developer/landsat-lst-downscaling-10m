@@ -1,6 +1,6 @@
 # Landsat LST Downscaling to 10m Resolution
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.18526672)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18526672.svg)](https://doi.org/10.5281/zenodo.18526672)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Google Earth Engine](https://img.shields.io/badge/Google%20Earth%20Engine-Code-blue)](https://earthengine.google.com/)
 
