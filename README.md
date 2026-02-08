@@ -34,9 +34,9 @@ If you use this code in your research, please cite:
 
 **Code Citation:**
 ```bibtex
-@software{zaki2026code,
+@software{zaki2026,
   author={[Abdurrahman Zaki]},
-  title={LST Downscaling Code v1.0.0},
+  title={Landsat LST Downscaling Framework (10m): Multi-Algorithm Implementation in Google Earth Engine},
   year={2026},
   publisher={Zenodo},
   doi={10.5281/zenodo.18526672},
