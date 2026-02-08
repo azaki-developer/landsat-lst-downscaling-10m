@@ -21,26 +21,25 @@ This repository contains a comprehensive Google Earth Engine (GEE) framework for
 
 If you use this code in your research, please cite:
 ```bibtex
-@article{zaki2026,
-  title={[Paper Title]},
-  author={[Abdurrahman Zaki]},
-  journal={[Journal Name]},
-  year={202X},
-  volume={XX},
-  pages={XX-XX},
-  doi={[DOI]}
-}
+---
 ```
 
 **Code Citation:**
 ```bibtex
-@software{zaki2026,
-  author={[Abdurrahman Zaki]},
-  title={Landsat LST Downscaling Framework (10m): Multi-Algorithm Implementation in Google Earth Engine},
-  year={2026},
-  publisher={Zenodo},
-  doi={10.5281/zenodo.18526672},
-  url={https://github.com/[azaki-developer]/landsat-lst-downscaling-10m}
+@software{zaki2026lst,
+  author       = {Zaki, Abdurrahman},
+  title        = {Landsat LST Downscaling Framework (10m): 
+                  Multi-Algorithm Implementation in Google Earth Engine},
+  month        = feb,
+  year         = 2025,
+  publisher    = {Zenodo},
+  version      = {1.0.0},
+  doi          = {10.5281/zenodo.18526672},
+  url          = {https://doi.org/10.5281/zenodo.18526672},
+  keywords     = {land surface temperature, downscaling, Google Earth Engine, 
+                  machine learning, Landsat, Sentinel-2, remote sensing},
+  license      = {MIT},
+  note         = {Source code: \url{https://github.com/azaki-developer/landsat-lst-downscaling-10m}}
 }
 ```
 
