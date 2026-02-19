@@ -10,12 +10,13 @@
 //   The workflow includes:
 //     1. Cloud masking and dry-day filtering
 //     2. LST retrieval (built-in and custom emissivity-corrected)
-//     3. Spectral index computation from Sentinel-2
+//     3. Spectral index computation from Sentinel-2 (with configurable
+//        resolution strategy to minimize SWIR resampling artifacts)
 //     4. SAR feature extraction from Sentinel-1
 //     5. ML model training at coarse resolution (300 m)
 //     6. Prediction at fine resolution (10 m)
 //     7. Residual correction to preserve coarse-scale consistency
-//     8. Validation against MODIS
+//     8. Optional validation of corrected 30 m LST against MODIS (quality check)
 //
 //   Supported algorithms:
 //     - GBT  (Gradient Boosted Trees)  — ee.Classifier.smileGradientTreeBoost
@@ -28,17 +29,26 @@
 //     selected algorithm. Results are printed to the console. After
 //     inspecting, set the best parameters and switch back to false.
 //
+//   Display and export options:
+//     Multiple toggles available for printing diagnostics (scene info,
+//     model statistics, variable importance) and exporting outputs
+//     (LST composites, MODIS validation, predictor bands, downscaled LST).
+//
 // CITATION:
-//   [Your paper citation here]
+//   Manuscript submitted for publication / under review
 //
 // HOW TO ADAPT FOR YOUR STUDY AREA:
 //   1. Replace 'aoi' rectangle with your area coordinates
 //   2. Replace 'study_boundary' asset with your boundary shapefile
-//   3. For precipitation: toggle USE_LOCAL_PRECIP to false to use ERA5,
-//      OR upload your own precipitation FeatureCollection (see PRECIPITATION
-//      section for required format)
-//   4. Adjust summer months if your study area is in the Southern Hemisphere
-//   5. Set ALGORITHM and tune hyperparameters for your study area
+//   3. Update YEARS array for your study period
+//   4. Set MANUAL_CRS to your local coordinate system if USE_AUTO_UTM = false
+//   5. Adjust SUMMER_START_MONTH and SUMMER_END_MONTH based on your study
+//      area's hemisphere (Northern: June-August; Southern: December-February)
+//   6. Adjust CLOUD_COVER_MAX threshold based on your region's cloud frequency
+//   7. For precipitation: toggle USE_LOCAL_PRECIP to false to use ERA5,
+//      OR upload your own precipitation FeatureCollection with required
+//      properties: 'date' (string 'YYYY-MM-dd') and 'daily_precip_mm' (number)
+//   8. Set ALGORITHM and tune hyperparameters via grid search for your study area
 //
 // REQUIRED ASSETS (for Warsaw case study):
 //   - projects/ee-abdurrahmanzaki20/assets/warsaw         (boundary)
@@ -67,7 +77,7 @@ function clipRegion() {
 // Auto-detect UTM zone from AOI centroid for portability.
 // If you prefer a specific local CRS (e.g., EPSG:2178 for Poland), set it below.
 
-var USE_AUTO_UTM = true; // true = auto-detect; false = use MANUAL_CRS
+var USE_AUTO_UTM = false; // true = auto-detect; false = use MANUAL_CRS
 var MANUAL_CRS = 'EPSG:2178'; // Only used if USE_AUTO_UTM = false
 
 function getProjectedCRS(geometry) {
@@ -109,7 +119,7 @@ var PRECIP_THRESHOLD_PREV = 1; // mm/day: max precip on the day before
 
 // Toggle: true = use uploaded local precipitation asset
 //         false = use ERA5-Land hourly reanalysis (global, ~11 km)
-var USE_LOCAL_PRECIP = false;
+var USE_LOCAL_PRECIP = true;
 
 // Local precipitation asset (Warsaw case study).
 // FORMAT REQUIRED: FeatureCollection with properties:
@@ -131,6 +141,17 @@ var USE_MEDIAN = false; // true = median composite; false = mean composite
 // GEE may exceed memory for large areas with many S1 scenes.
 // Increase STEP to reduce scenes (2 = every 2nd scene = 50% reduction).
 var S1_SUBSAMPLE_STEP = 2;  // 1 = no subsampling; 2 = 50%; 3 = 66% reduction. Doing subsampling means trading temporal coverage for memory safety.
+
+// --- Sentinel-2 index computation strategy ---
+// 'NATIVE_20M': Compute SWIR indices at native 20 m (10 m bands aggregated
+//               to 20 m first), then bilinear resample indices to 10 m.
+//               Fewest edge artifacts, but loses some 10 m spatial detail.
+// 'BILINEAR_BAND': Resample B11/B12 to 10 m via bilinear before computing
+//                  indices. Preserves 10 m detail but may produce edge
+//                  artifacts from resolution mismatch between sharp 10 m
+//                  and smooth resampled 20 m bands.
+// 'NEAREST' : Default GEE behavior. Fastest, but produces blocky artifacts.
+var INDEX_STRATEGY = 'NATIVE_20M';
 
 
 // =============================================================================
@@ -165,8 +186,8 @@ var GBT_MAX_NODES       = 25;     // Max terminal nodes per tree
 var GBT_LOSS            = 'LeastAbsoluteDeviation'; // Robust to outliers
 
 // --- RF (Random Forest) ---
-var RF_NUMBER_OF_TREES    = 300;
-var RF_VARIABLES_PER_SPLIT = 2;  // null = default (sqrt of num features)
+var RF_NUMBER_OF_TREES    = 500;
+var RF_VARIABLES_PER_SPLIT = 6;  // null = default (sqrt of num features)
 var RF_MIN_LEAF_POPULATION = 1;     // Min samples in a leaf node
 var RF_BAG_FRACTION        = 0.5;   // Fraction of input to bag per tree
 var RF_MAX_NODES           = null;  // null = no limit
@@ -177,7 +198,7 @@ var SVM_COST        = 100;      // Regularization parameter
 var SVM_GAMMA       = 0.1;     // Kernel coefficient for RBF
 
 // --- CART (Classification and Regression Trees) ---
-var CART_MAX_NODES           = 50; // null = no limit
+var CART_MAX_NODES           = 100; // null = no limit
 var CART_MIN_LEAF_POPULATION = 10;    // Min samples in a leaf node
 
 
@@ -198,7 +219,7 @@ var CART_MIN_LEAF_POPULATION = 10;    // Min samples in a leaf node
 // Each combination trains a separate model on GEE servers.
 // Keep grids small (≤ 27 combinations) to avoid quota issues.
 
-var GRID_SEARCH_ENABLED = true;
+var GRID_SEARCH_ENABLED = false;
 var GRID_SEARCH_YEAR = 2025; // Which year to use for grid search
 
 // --- GBT grid ---
@@ -234,10 +255,10 @@ var GRID_DIMENSIONS = 2;
 
 // --- Display toggles ---
 var PRINT_SCENE_INFO           = false;   // Print scene count, dates, and times per satellite
+var VALIDATE_MODIS             = false;  // Validate corrected Landsat LST against MODIS Terra/Aqua
 var SHOW_TRAIN_TEST_POINTS     = false;  // Add train and test samples as layers
 var PRINT_IMPORTANCE           = false;  // Variable importance (GBT, RF, CART only)
-var PRINT_MODEL_STATS          = false;  // Model performance statistics
-var VALIDATE_MODIS             = false;  // Validate corrected Landsat LST against MODIS Terra/Aqua
+var PRINT_MODEL_STATS          = true;  // Model performance statistics
 
 // --- Export toggles ---
 var EXPORT_MODIS_TERRA_TO_DRIVE = false; // Export MODIS Terra LST composite
@@ -245,7 +266,7 @@ var EXPORT_MODIS_AQUA_TO_DRIVE  = false; // Export MODIS Aqua LST composite
 var EXPORT_STD_LST_TO_DRIVE    = false;  // Export standard (Collection 2) LST
 var EXPORT_CORR_LST_TO_DRIVE   = false;  // Export emissivity-corrected LST
 var EXPORT_PREDICTORS_TO_DRIVE = false;  // Export all predictor bands per year
-var EXPORT_DOWNSCALED_TO_DRIVE = false;  // Export 10 m downscaled LST
+var EXPORT_DOWNSCALED_TO_DRIVE = true;  // Export 10 m downscaled LST
 
 
 
@@ -514,16 +535,22 @@ function correctedLST(img) {
 
 /**
  * Compute spectral indices from Sentinel-2 bands.
- * Bands are scaled to reflectance (0-1) before computation.
- * Note: B11 and B12 (SWIR) are native 20 m, resampled to 10 m by GEE.
+ * 
+ * When INDEX_STRATEGY = 'NATIVE_20M':
+ *   SWIR-based indices (NDBI, BSI, MNDWI, ALBEDO) are computed at 20 m native
+ *   resolution by aggregating 10 m bands (B2, B3, B4, B8) to match B11/B12,
+ *   then bilinear-resampled to 10 m. This avoids mixed-pixel artifacts caused
+ *   by nearest-neighbor resampling of 20 m SWIR bands to the 10 m grid.
  *
- * Indices:
- *   NDVI  = (B8 - B4) / (B8 + B4)           Vegetation density
- *   NDBI  = (B11 - B8) / (B11 + B8)         Built-up areas
- *   BSI   = ((B11+B4)-(B8+B2)) / ((B11+B4)+(B8+B2))  Bare soil
- *   MNDWI = (B3 - B11) / (B3 + B11)         Water features
- *   ALBEDO = weighted broadband albedo       Surface reflectivity
- *            (Bonafoni & Sekertekin, 2020)
+ * When INDEX_STRATEGY = 'BILINEAR_BAND':
+ *   B11/B12 are bilinear-resampled to 10 m before computing indices. Preserves
+ *   10 m detail but may produce edge artifacts from resolution mismatch.
+ *
+ * When INDEX_STRATEGY = 'NEAREST':
+ *   All indices are computed at 10 m directly (GEE default nearest-neighbor
+ *   resampling for B11/B12). Fastest but may produce blocky edge artifacts.
+ *
+ * NDVI is always computed at 10 m since both B8 and B4 are native 10 m.
  */
 function addCovariates(img) {
   var b2  = img.select('B2').multiply(0.0001);
@@ -533,29 +560,83 @@ function addCovariates(img) {
   var b11 = img.select('B11').multiply(0.0001);
   var b12 = img.select('B12').multiply(0.0001);
 
-  // NDVI
+  // NDVI — both bands native 10 m, always computed directly
   var den  = b8.add(b4);
   var ndvi = b8.subtract(b4).divide(den).updateMask(den.gt(0)).rename('NDVI');
 
-  // NDBI
-  var ndbi = b11.subtract(b8).divide(b11.add(b8)).rename('NDBI');
+  var ndbi, bsi, mndwi, albedo;
 
-  // BSI (Bare Soil Index)
-  var bsi = b11.add(b4).subtract(b8).subtract(b2)
-    .divide(b11.add(b4).add(b8).add(b2)).rename('BSI');
+  if (INDEX_STRATEGY === 'NATIVE_20M') {
+    // ── Compute indices at 20 m, resample results to 10 m ──
+    // Both 10 m and 20 m bands share the same pixel grid during computation,
+    // eliminating resolution mismatch artifacts at land-water boundaries.
+    var proj10 = ee.Projection(PROJ_CRS).atScale(10);
+    var proj20 = ee.Projection(PROJ_CRS).atScale(20);
 
-  // MNDWI (Modified Normalized Difference Water Index)
-  var mndwi = b3.subtract(b11).divide(b3.add(b11)).rename('MNDWI');
+    // Aggregate 10 m bands to 20 m grid
+    var b2_20 = b2.setDefaultProjection(proj10)
+                  .reduceResolution({reducer: ee.Reducer.mean(), maxPixels: 4})
+                  .reproject({crs: proj20});
+    var b3_20 = b3.setDefaultProjection(proj10)
+                  .reduceResolution({reducer: ee.Reducer.mean(), maxPixels: 4})
+                  .reproject({crs: proj20});
+    var b4_20 = b4.setDefaultProjection(proj10)
+                  .reduceResolution({reducer: ee.Reducer.mean(), maxPixels: 4})
+                  .reproject({crs: proj20});
+    var b8_20 = b8.setDefaultProjection(proj10)
+                  .reduceResolution({reducer: ee.Reducer.mean(), maxPixels: 4})
+                  .reproject({crs: proj20});
 
-  // Broadband Albedo using narrow-to-broadband conversion coefficients
-  // from Bonafoni & Sekertekin (2020), designed for Sentinel-2
-  var albedo = b2.multiply(0.2266)
-    .add(b3.multiply(0.1236))
-    .add(b4.multiply(0.1573))
-    .add(b8.multiply(0.3417))
-    .add(b11.multiply(0.1170))
-    .add(b12.multiply(0.0338))
-    .rename('ALBEDO');
+    // Indices computed at 20 m, then bilinear resampled to 10 m
+    var ndbi_20 = b11.subtract(b8_20).divide(b11.add(b8_20));
+    ndbi = ndbi_20.resample('bilinear').rename('NDBI');
+
+    var bsi_num_20 = b11.add(b4_20).subtract(b8_20).subtract(b2_20);
+    var bsi_den_20 = b11.add(b4_20).add(b8_20).add(b2_20);
+    bsi = bsi_num_20.divide(bsi_den_20).resample('bilinear').rename('BSI');
+
+    var mndwi_20 = b3_20.subtract(b11).divide(b3_20.add(b11));
+    mndwi = mndwi_20.resample('bilinear').rename('MNDWI');
+
+    var albedo_20 = b2_20.multiply(0.2266)
+      .add(b3_20.multiply(0.1236))
+      .add(b4_20.multiply(0.1573))
+      .add(b8_20.multiply(0.3417))
+      .add(b11.multiply(0.1170))
+      .add(b12.multiply(0.0338));
+    albedo = albedo_20.resample('bilinear').rename('ALBEDO');
+
+  } else if (INDEX_STRATEGY === 'BILINEAR_BAND') {
+    // ── Resample B11/B12 to 10 m first, then compute indices ──
+    // Preserves full 10 m detail from visible/NIR bands, but resolution
+    // mismatch between sharp 10 m and smooth 20 m can cause edge artifacts.
+    var proj20b = ee.Projection(PROJ_CRS).atScale(20);
+    var b11r = img.select('B11').setDefaultProjection(proj20b)
+                  .resample('bilinear').multiply(0.0001);
+    var b12r = img.select('B12').setDefaultProjection(proj20b)
+                  .resample('bilinear').multiply(0.0001);
+
+    ndbi = b11r.subtract(b8).divide(b11r.add(b8)).rename('NDBI');
+    bsi = b11r.add(b4).subtract(b8).subtract(b2)
+      .divide(b11r.add(b4).add(b8).add(b2)).rename('BSI');
+    mndwi = b3.subtract(b11r).divide(b3.add(b11r)).rename('MNDWI');
+    albedo = b2.multiply(0.2266).add(b3.multiply(0.1236))
+      .add(b4.multiply(0.1573)).add(b8.multiply(0.3417))
+      .add(b11r.multiply(0.1170)).add(b12r.multiply(0.0338))
+      .rename('ALBEDO');
+
+  } else {
+    // ── NEAREST: default GEE behavior ──
+    // Fastest. B11/B12 implicitly nearest-neighbor resampled to 10 m.
+    ndbi = b11.subtract(b8).divide(b11.add(b8)).rename('NDBI');
+    bsi = b11.add(b4).subtract(b8).subtract(b2)
+      .divide(b11.add(b4).add(b8).add(b2)).rename('BSI');
+    mndwi = b3.subtract(b11).divide(b3.add(b11)).rename('MNDWI');
+    albedo = b2.multiply(0.2266).add(b3.multiply(0.1236))
+      .add(b4.multiply(0.1573)).add(b8.multiply(0.3417))
+      .add(b11.multiply(0.1170)).add(b12.multiply(0.0338))
+      .rename('ALBEDO');
+  }
 
   return img.addBands([ndvi, ndbi, bsi, mndwi, albedo]);
 }
@@ -1269,7 +1350,7 @@ function processSummerYear(year) {
     .clip(clipRegion())
     .set('year', year)
     .set('algorithm', ALGORITHM);
-
+  
   Map.addLayer(downscaledLST, VIS_LST,
     'Downscaled LST 10 m (' + ALGORITHM + ') — ' + year, false);
 
@@ -1277,9 +1358,9 @@ function processSummerYear(year) {
   if (EXPORT_DOWNSCALED_TO_DRIVE) {
     Export.image.toDrive({
       image: downscaledLST,
-      description: 'Downscaled_LST_' + ALGORITHM + '_Summer_' + year,
+      description: 'Downscaled_LST_' + ALGORITHM + '_' + INDEX_STRATEGY + '_Summer_' + year,
       folder: 'LST_Downscaling',
-      fileNamePrefix: 'Downscaled_LST_' + ALGORITHM + '_Summer_' + year,
+      fileNamePrefix: 'Downscaled_LST_' + ALGORITHM + '_' + INDEX_STRATEGY + '_Summer_' + year,
       region: clipRegion(), scale: FINE_SCALE, maxPixels: 1e13, crs: PROJ_CRS
     });
   }
