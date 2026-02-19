@@ -410,5 +410,5 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 
 **Last Updated:** 19.02.2026  
-**Version:** 1.0.0  
+**Version:** 1.1.0  
 **DOI:** [10.5281/zenodo.18526672](https://doi.org/10.5281/zenodo.18526672)
