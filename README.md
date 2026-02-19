@@ -1,6 +1,6 @@
 # Landsat LST Downscaling to 10m Resolution
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18526672.svg)](https://doi.org/10.5281/zenodo.18526672)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18694471.svg)](https://doi.org/10.5281/zenodo.18694471)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Google Earth Engine](https://img.shields.io/badge/Google%20Earth%20Engine-Code-blue)](https://earthengine.google.com/)
 
@@ -36,8 +36,8 @@ If you use this code in your research, please cite:
   year         = 2026,
   publisher    = {Zenodo},
   version      = {1.0.0},
-  doi          = {10.5281/zenodo.18526672},
-  url          = {https://doi.org/10.5281/zenodo.18526672},
+  doi          = {10.5281/zenodo.18694471},
+  url          = {https://doi.org/10.5281/zenodo.18694471},
   keywords     = {land surface temperature, downscaling, Google Earth Engine, 
                   machine learning, Landsat, Sentinel-2, remote sensing},
   license      = {MIT},
@@ -411,4 +411,4 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 **Last Updated:** 19.02.2026  
 **Version:** 1.1.0  
-**DOI:** [10.5281/zenodo.18526672](https://doi.org/10.5281/zenodo.18526672)
+**DOI:** [10.5281/zenodo.18694471](https://doi.org/10.5281/zenodo.18694471)
