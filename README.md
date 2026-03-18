@@ -1,6 +1,6 @@
 # Landsat LST Downscaling to 10m Resolution
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18694471.svg)](https://doi.org/10.5281/zenodo.18694471)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18526671.svg)](https://doi.org/10.5281/zenodo.18526671)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Google Earth Engine](https://img.shields.io/badge/Google%20Earth%20Engine-Code-blue)](https://earthengine.google.com/)
 
@@ -10,12 +10,12 @@ This repository contains a Google Earth Engine (GEE) framework for downscaling L
 
 **Key Features:**
 - Multi-algorithm support: Gradient Boosted Trees (GBT), Random Forest (RF), Support Vector Machine (SVM), and Classification and Regression Trees (CART)
+- SAR ablation test to compare optical+SAR vs. optical-only model performance
 - Automated dry-day filtering using local or ERA5-Land precipitation data
 - Custom NDVI-based emissivity-corrected LST retrieval
 - Configurable SWIR resampling strategy to minimize spectral index artifacts
 - Residual correction for thermal consistency
 - Built-in hyperparameter grid search (2D or 3D parameter sweeps)
-- Optional MODIS Terra/Aqua validation workflow
 - Batch processing for multi-year analysis
 
 ## Citation
@@ -32,12 +32,12 @@ If you use this code in your research, please cite:
   author       = {Zaki, Abdurrahman},
   title        = {Landsat LST Downscaling Framework (10m): 
                   Multi-Algorithm Implementation in Google Earth Engine},
-  month        = feb,
+  month        = mar,
   year         = 2026,
   publisher    = {Zenodo},
-  version      = {1.0.0},
+  version      = {2.0.0},
   doi          = {10.5281/zenodo.18694471},
-  url          = {https://doi.org/10.5281/zenodo.18694471},
+  url          = {https://doi.org/10.5281/zenodo.18526671},
   keywords     = {land surface temperature, downscaling, Google Earth Engine, 
                   machine learning, Landsat, Sentinel-2, remote sensing},
   license      = {MIT},
@@ -59,11 +59,9 @@ All satellite data are freely accessible through Google Earth Engine:
 |---------|-------------------|-------------------|
 | Landsat 8 Collection 2 Level 2 | `LANDSAT/LC08/C02/T1_L2` | 30 m (thermal) |
 | Landsat 9 Collection 2 Level 2 | `LANDSAT/LC09/C02/T1_L2` | 30 m (thermal) |
-| Sentinel-2 Level-2A | `COPERNICUS/S2_SR_HARMONIZED` | 10–20 m |
+| Sentinel-2 Level-2A | `COPERNICUS/S2_SR_HARMONIZED` | 10-20 m |
 | Sentinel-1 GRD | `COPERNICUS/S1_GRD` | 10 m |
 | ERA5-Land (optional) | `ECMWF/ERA5_LAND/HOURLY` | ~11 km |
-| MODIS Terra (optional) | `MODIS/061/MOD11A1` | 1 km |
-| MODIS Aqua (optional) | `MODIS/061/MYD11A1` | 1 km |
 
 ## Quick Start
 
@@ -96,6 +94,7 @@ var SUMMER_START_MONTH = 6;                  // Adjust for your region
 var SUMMER_END_MONTH = 8;
 var USE_LOCAL_PRECIP = false;                // false = use ERA5 (global)
 var INDEX_STRATEGY = 'NATIVE_20M';          // SWIR resampling strategy (see below)
+var ABLATION_OPTICAL_ONLY = false;           // true = exclude SAR predictors
 ```
 
 ### 4. Run Script
@@ -107,35 +106,53 @@ Click **Run** button. Processing time depends on area size.
 ### Workflow Diagram
 ```
 Landsat 8/9 (30m LST)
-         ↓
+         |
     Cloud Masking
-         ↓
-Dry-Day Filtering ←────── Precipitation Data (local or ERA5)
-         ↓
-Emissivity Correction ←─── NDVI (two-endmember model)
-         ↓
-Training Data (300m) ←───── Sentinel-2 Indices (10m → strategy-dependent)
-         │                  Sentinel-1 SAR (10m)
-         ↓
+         |
+Dry-Day Filtering <------ Precipitation Data (local or ERA5)
+         |
+Emissivity Correction <--- NDVI (two-endmember model)
+         |
+Training Data (300m) <----- Sentinel-2 Indices (10m, strategy-dependent)
+         |                  Sentinel-1 SAR (10m, optional via ablation toggle)
+         |
    ML Model Training
     (GBT/RF/SVM/CART)
-         ↓
+         |
   Prediction at 10m
-         ↓
+         |
   Residual Correction
-         ↓
+         |
   Downscaled LST (10m)
 ```
 
 ### Key Steps
 
-1. **LST Retrieval:** Custom emissivity-corrected LST using NDVI-based two-endmember mixing model (ε_vegetation = 0.987, ε_soil = 0.971, ε_water = 0.99). Standard Collection 2 LST is also computed for comparison.
+1. **LST Retrieval:** Custom emissivity-corrected LST using NDVI-based two-endmember mixing model (e_vegetation = 0.982, e_soil = 0.971, e_water = 0.99). Standard Collection 2 LST is also computed for comparison.
 2. **Dry-Day Filtering:** Removes scenes with precipitation exceeding the threshold on the current and previous day (default: 1 mm/day each, adjustable).
 3. **Predictor Variables:**
-   - **Sentinel-2:** NDVI, NDBI, BSI, MNDWI, Albedo
-   - **Sentinel-1:** VV, VH, VV/VH ratio
+   - **Sentinel-2:** NDVI, NDBI, BSI, MNDWI, Albedo (5 predictors)
+   - **Sentinel-1:** VV, VH, VV/VH ratio (3 predictors, optional via ablation toggle)
 4. **Model Training:** Coarse resolution (300 m) using a 70/30 train-test split.
 5. **Downscaling:** Prediction at fine resolution (10 m) followed by bilinear residual correction to preserve coarse-scale thermal consistency.
+
+## SAR Ablation Test
+
+The framework includes a built-in ablation test to evaluate whether Sentinel-1 SAR predictors improve downscaling accuracy:
+
+```javascript
+// Full model: 8 predictors (optical + SAR)
+var ABLATION_OPTICAL_ONLY = false;
+
+// Optical-only: 5 predictors (no SAR)
+var ABLATION_OPTICAL_ONLY = true;
+```
+
+When `ABLATION_OPTICAL_ONLY = true`:
+- Sentinel-1 processing is skipped entirely (saves computation)
+- RF `variablesPerSplit` is automatically adjusted from 6 to 3 to maintain a comparable ratio of randomly selected features per split
+- RF grid search ranges for `variablesPerSplit` are adjusted accordingly (from [2, 4, 6] to [2, 3, 4])
+- Export filenames include `_OpticalOnly` or `_Full` tag for traceability
 
 ## Algorithm Selection
 
@@ -162,7 +179,7 @@ Sentinel-2 SWIR bands (B11, B12) have a native resolution of 20 m. The strategy 
 var INDEX_STRATEGY = 'NATIVE_20M'; // Recommended
 ```
 
-The chosen strategy is included in the export filename for reproducibility (e.g., `Downscaled_LST_RF_NATIVE_20M_Summer_2023.tif`).
+The chosen strategy is included in the export filename for reproducibility (e.g., `Downscaled_LST_RF_NATIVE_20M_Full_Summer_2023.tif`).
 
 ## Hyperparameter Tuning
 
@@ -175,7 +192,7 @@ var ALGORITHM = 'RF';
 var GRID_DIMENSIONS = 2;      // 2 = tune two parameter arrays; 3 = three (GBT and RF only)
 ```
 
-Run script → inspect console results (RMSE table and R² chart per combination) → update fixed hyperparameters:
+Run script, inspect console results (RMSE table and R2 chart per combination), then update fixed hyperparameters:
 
 ```javascript
 // After finding best parameters:
@@ -196,8 +213,8 @@ var GBT_GRID_MAX_NODES = [10, 25, 50]; // Used only when GRID_DIMENSIONS = 3
 **RF:**
 ```javascript
 var RF_GRID_NUM_TREES          = [100, 300, 500];
-var RF_GRID_VARIABLES_PER_SPLIT = [2, 4, 6];
-var RF_GRID_MIN_LEAF_POP       = [1, 5, 10]; // Used only when GRID_DIMENSIONS = 3
+var RF_GRID_VARIABLES_PER_SPLIT = [2, 4, 6];     // Auto-adjusted for ablation mode
+var RF_GRID_MIN_LEAF_POP       = [1, 5, 10];     // Used only when GRID_DIMENSIONS = 3
 ```
 
 **SVM:**
@@ -212,7 +229,7 @@ var CART_GRID_MAX_NODES    = [-1, 50, 100]; // -1 = unlimited
 var CART_GRID_MIN_LEAF_POP = [1, 5, 10];
 ```
 
-> Keep grid combinations to ≤ 27 to avoid GEE compute quota issues.
+> Keep grid combinations to 27 or fewer to avoid GEE compute quota issues.
 
 ## Configuration Options
 
@@ -246,7 +263,7 @@ Required format for local data (FeatureCollection):
 var CLOUD_COVER_MAX = 20;   // Max scene-level cloud cover % for initial filtering
 var CLOUD_BUFFER_M  = 0;    // Buffer around cloud pixels in meters
                              // 0 = no buffer (used for Warsaw; recommended default)
-                             // 100–300 = conservative masking for sensitivity analysis
+                             // 100-300 = conservative masking for sensitivity analysis
                              //           Note: may increase data gaps in cloudy regions
 ```
 
@@ -266,26 +283,23 @@ var S1_SUBSAMPLE_STEP = 2; // 1 = all scenes; 2 = every 2nd (50% reduction); 3 =
 var PRINT_SCENE_INFO       = false; // Print scene count, dates, and times per satellite
 var SHOW_TRAIN_TEST_POINTS = false; // Add train/test sample points as map layers
 var PRINT_IMPORTANCE       = false; // Variable importance (GBT, RF, CART only)
-var PRINT_MODEL_STATS      = true;  // RMSE, MAE, R² on train and test sets
-var VALIDATE_MODIS         = false; // Validate corrected Landsat LST against MODIS Terra/Aqua
+var PRINT_MODEL_STATS      = true;  // RMSE, MAE, R2 on train and test sets
 ```
 
 ### Export Toggles
 
 ```javascript
-var EXPORT_MODIS_TERRA_TO_DRIVE = false; // MODIS Terra LST composite (1 km)
-var EXPORT_MODIS_AQUA_TO_DRIVE  = false; // MODIS Aqua LST composite (1 km)
 var EXPORT_STD_LST_TO_DRIVE    = false;  // Standard Collection 2 LST (30 m)
 var EXPORT_CORR_LST_TO_DRIVE   = false;  // Emissivity-corrected LST (30 m)
 var EXPORT_PREDICTORS_TO_DRIVE = false;  // All predictor bands per year (10 m)
-var EXPORT_DOWNSCALED_TO_DRIVE = true;   // Downscaled LST (10 m) — main output
+var EXPORT_DOWNSCALED_TO_DRIVE = false;  // Downscaled LST (10 m) - main output
 ```
 
 ## Main Outputs
 
 ### 1. Downscaled LST (10 m)
-- **Filename:** `Downscaled_LST_[ALGORITHM]_[INDEX_STRATEGY]_Summer_[YEAR].tif`
-- **Unit:** °C
+- **Filename:** `Downscaled_LST_[ALGORITHM]_[INDEX_STRATEGY]_[Full/OpticalOnly]_Summer_[YEAR].tif`
+- **Unit:** degrees Celsius
 - **CRS:** Auto-detected UTM or manual EPSG
 
 ### 2. Emissivity-Corrected Landsat LST (30 m)
@@ -297,21 +311,11 @@ var EXPORT_DOWNSCALED_TO_DRIVE = true;   // Downscaled LST (10 m) — main outpu
 - Collection 2 built-in thermal product
 
 ### 4. Console Outputs
-- Model accuracy metrics (RMSE, MAE, R²) on train and test sets
-- ΔRMSE (test − train) for overfitting check
+- Model accuracy metrics (RMSE, MAE, R2) on train and test sets
+- RMSE difference between test and train for overfitting check
 - Variable importance for tree-based models
-- MODIS validation statistics (optional)
+- Ablation mode status (full or optical-only)
 - Scene counts and acquisition dates per satellite (optional)
-
-## Validation
-
-The framework includes optional MODIS Terra/Aqua validation:
-
-```javascript
-var VALIDATE_MODIS = true;
-```
-
-This aggregates the corrected Landsat LST (30 m) to 1 km and computes RMSE, MAE, and R² against MODIS LST products (best/good QC pixels only). It serves as an independent quality check before downscaling.
 
 ## Study Area Portability
 
@@ -319,10 +323,11 @@ The framework is designed for easy adaptation to new regions:
 
 1. **Change coordinates** in SECTION 1
 2. **Update boundary asset** or set `CROP_TO_BOUNDARY = false` to use AOI rectangle only
-3. **Update CRS** — auto-detects UTM, or set `MANUAL_CRS` to your local EPSG
-4. **Adjust seasons** (`SUMMER_START_MONTH` / `SUMMER_END_MONTH`) — Northern Hemisphere: June–August; Southern Hemisphere: December–February
-5. **Use ERA5** for precipitation (`USE_LOCAL_PRECIP = false`) — no local data needed
+3. **Update CRS** - auto-detects UTM, or set `MANUAL_CRS` to your local EPSG
+4. **Adjust seasons** (`SUMMER_START_MONTH` / `SUMMER_END_MONTH`) - Northern Hemisphere: June-August; Southern Hemisphere: December-February
+5. **Use ERA5** for precipitation (`USE_LOCAL_PRECIP = false`) - no local data needed
 6. **Tune cloud threshold** (`CLOUD_COVER_MAX`) based on regional cloud frequency
+7. **Run ablation test** to check whether SAR predictors improve accuracy for your study area
 
 Tested successfully in:
 - Warsaw, Poland (temperate, urban)
@@ -332,7 +337,7 @@ Tested successfully in:
 
 ### Memory Management
 
-For large study areas (> 500 km²):
+For large study areas (> 500 km2):
 
 ```javascript
 var S1_SUBSAMPLE_STEP = 2;   // Reduce Sentinel-1 scenes (50% reduction)
@@ -342,9 +347,9 @@ var NUM_PIXELS = 20000;      // Reduce training samples if needed (default: 40,0
 ### Processing Time
 
 Approximate processing time per year (excludes export):
-- Small area (< 100 km²): 3–5 minutes
-- Medium area (100–500 km²): 8–15 minutes
-- Large area (> 500 km²): 20–40 minutes
+- Small area (< 100 km2): 3-5 minutes
+- Medium area (100-500 km2): 8-15 minutes
+- Large area (> 500 km2): 20-40 minutes
 
 ## Troubleshooting
 
@@ -359,12 +364,31 @@ var NUM_PIXELS = 20000;     // Reduce from default 40,000
 
 ### No LST data / all pixels masked
 - Increase `CLOUD_COVER_MAX` (try 30)
-- Relax dry-day filtering: increase `PRECIP_THRESHOLD` to 2–5 mm
+- Relax dry-day filtering: increase `PRECIP_THRESHOLD` to 2-5 mm
 - Enable `PRINT_SCENE_INFO = true` to inspect available scene counts and dates
 
 ### Export fails
-- Ensure study area is under ~10,000 km² per export task
+- Ensure study area is under ~10,000 km2 per export task
 - Confirm `PROJ_CRS` is printed correctly as a string in the console
+
+## Changelog
+
+### v2.0.0 (March 2026) - Revised manuscript version
+- Added SAR ablation test (`ABLATION_OPTICAL_ONLY` toggle) to compare optical+SAR vs. optical-only model performance
+- Automatic adjustment of RF `variablesPerSplit` (6 for full model, 3 for optical-only) to maintain proper RF randomization during ablation
+- Separate covariate lists (`COVARIATES_FULL`, `COVARIATES_OPTICAL`) with conditional selection based on ablation mode
+- Sentinel-1 processing is skipped when `ABLATION_OPTICAL_ONLY = true` to save computation
+- Export filenames now include ablation tag (`_Full` or `_OpticalOnly`)
+- Fixed vegetation emissivity value from 0.987 to 0.982 (matching Rajan et al., 2022)
+- Removed MODIS validation module (no longer part of the manuscript workflow)
+- Ablation mode status printed at script startup
+
+### v1.0.0 (February 2026) - Initial release
+- Multi-algorithm LST downscaling framework (GBT, RF, SVM, CART)
+- Grid search with 2D/3D parameter sweeps
+- Three SWIR index computation strategies
+- MODIS Terra/Aqua validation workflow
+- ERA5-Land and local precipitation support
 
 ## Contributing
 
@@ -377,15 +401,15 @@ Contributions are welcome! Please:
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ### MIT License Summary
-- ✅ Commercial use allowed
-- ✅ Modification allowed
-- ✅ Distribution allowed
-- ✅ Private use allowed
-- ⚠️ Must include original license and copyright notice
-- ❌ No warranty provided
+- Commercial use allowed
+- Modification allowed
+- Distribution allowed
+- Private use allowed
+- Must include original license and copyright notice
+- No warranty provided
 
 ## Acknowledgments
 
@@ -393,22 +417,21 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 - Landsat 8/9: USGS/NASA
 - Sentinel-2 and Sentinel-1: ESA/Copernicus
 - ERA5-Land: ECMWF
-- MODIS: NASA
 
 **Platform:** Google Earth Engine
 
 **References:**
-- Emissivity method adapted from Sobrino et al. (2008)
+- Emissivity values from Rajan et al. (2022) and Deng & Wu (2013)
 - Albedo coefficients from Bonafoni & Sekertekin (2020)
 
 ## Contact
 
 **Author:** Abdurrahman Zaki  
-**Email:** abdzak@amu.edu.pl · abdurrahman.zaki20@pwk.undip.ac.id  
+**Email:** abdzak@amu.edu.pl / abdurrahman.zaki20@pwk.undip.ac.id  
 **ORCID:** [0000-0001-9759-7293](https://orcid.org/0000-0001-9759-7293)  
-**Institution:** Faculty of Geographical and Geological Sciences, Adam Mickiewicz University, Poznań
+**Institution:** Faculty of Geographical and Geological Sciences, Adam Mickiewicz University, Poznan
 
 
-**Last Updated:** 19.02.2026  
-**Version:** 1.1.0  
-**DOI:** [10.5281/zenodo.18694471](https://doi.org/10.5281/zenodo.18694471)
+**Last Updated:** 18.03.2026  
+**Version:** 2.0.0  
+**DOI:** [10.5281/zenodo.18694471](https://doi.org/10.5281/zenodo.18526671)
