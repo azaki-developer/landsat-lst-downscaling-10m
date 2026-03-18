@@ -14,9 +14,9 @@
 //        resolution strategy to minimize SWIR resampling artifacts)
 //     4. SAR feature extraction from Sentinel-1
 //     5. ML model training at coarse resolution (300 m)
-//     6. Prediction at fine resolution (10 m)
-//     7. Residual correction to preserve coarse-scale consistency
-//     8. Optional validation of corrected 30 m LST against MODIS (quality check)
+//     6. SAR ablation test (optical-only vs optical+SAR predictors)
+//     7. Prediction at fine resolution (10 m)
+//     8. Residual correction to preserve coarse-scale consistency
 //
 //   Supported algorithms:
 //     - GBT  (Gradient Boosted Trees)  — ee.Classifier.smileGradientTreeBoost
@@ -32,7 +32,7 @@
 //   Display and export options:
 //     Multiple toggles available for printing diagnostics (scene info,
 //     model statistics, variable importance) and exporting outputs
-//     (LST composites, MODIS validation, predictor bands, downscaled LST).
+//     (LST composites, predictor bands, downscaled LST).
 //
 // CITATION:
 //   Manuscript submitted for publication / under review
@@ -162,6 +162,12 @@ var INDEX_STRATEGY = 'NATIVE_20M';
 // and validation workflow. Only the classifier changes.
 var ALGORITHM = 'RF';
 
+// --- SAR ablation test ---
+// Compares model performance with and without Sentinel-1 derived predictors.
+// true  = optical-only predictors (NDVI, NDBI, BSI, MNDWI, ALBEDO) - 5 predictors
+// false = full model with optical + SAR predictors (+ VV, VH, VV_VH_RATIO) - 8 predictors
+var ABLATION_OPTICAL_ONLY = false;
+
 // --- Sampling ---
 var NUM_PIXELS = 40000;  // Total pixels sampled for training+testing
 var SEED       = 0;      // Random seed for reproducibility
@@ -187,7 +193,8 @@ var GBT_LOSS            = 'LeastAbsoluteDeviation'; // Robust to outliers
 
 // --- RF (Random Forest) ---
 var RF_NUMBER_OF_TREES    = 500;
-var RF_VARIABLES_PER_SPLIT = 6;  // null = default (sqrt of num features)
+// Adjusted automatically: 6 for full model (8 predictors), 3 for optical-only (5 predictors)
+var RF_VARIABLES_PER_SPLIT = ABLATION_OPTICAL_ONLY ? 3 : 6;
 var RF_MIN_LEAF_POPULATION = 1;     // Min samples in a leaf node
 var RF_BAG_FRACTION        = 0.5;   // Fraction of input to bag per tree
 var RF_MAX_NODES           = null;  // null = no limit
@@ -231,7 +238,7 @@ var GBT_GRID_MAX_NODES = [10, 25, 50]; // Optional 3rd parameter
 // --- RF grid ---
 // Key parameters: numberOfTrees × variablesPerSplit
 var RF_GRID_NUM_TREES         = [100, 300, 500];
-var RF_GRID_VARIABLES_PER_SPLIT = [2, 4, 6];
+var RF_GRID_VARIABLES_PER_SPLIT = ABLATION_OPTICAL_ONLY ? [2, 3, 4] : [2, 4, 6];
 var RF_GRID_MIN_LEAF_POP      = [1, 5, 10]; // Optional 3rd parameter
 
 // --- SVM grid ---
@@ -255,18 +262,15 @@ var GRID_DIMENSIONS = 2;
 
 // --- Display toggles ---
 var PRINT_SCENE_INFO           = false;   // Print scene count, dates, and times per satellite
-var VALIDATE_MODIS             = false;  // Validate corrected Landsat LST against MODIS Terra/Aqua
 var SHOW_TRAIN_TEST_POINTS     = false;  // Add train and test samples as layers
 var PRINT_IMPORTANCE           = false;  // Variable importance (GBT, RF, CART only)
 var PRINT_MODEL_STATS          = true;  // Model performance statistics
 
 // --- Export toggles ---
-var EXPORT_MODIS_TERRA_TO_DRIVE = false; // Export MODIS Terra LST composite
-var EXPORT_MODIS_AQUA_TO_DRIVE  = false; // Export MODIS Aqua LST composite
 var EXPORT_STD_LST_TO_DRIVE    = false;  // Export standard (Collection 2) LST
 var EXPORT_CORR_LST_TO_DRIVE   = false;  // Export emissivity-corrected LST
 var EXPORT_PREDICTORS_TO_DRIVE = false;  // Export all predictor bands per year
-var EXPORT_DOWNSCALED_TO_DRIVE = true;  // Export 10 m downscaled LST
+var EXPORT_DOWNSCALED_TO_DRIVE = false;  // Export 10 m downscaled LST
 
 
 
@@ -475,9 +479,9 @@ function addLSTc(img) {
 /**
  * Custom LST using NDVI-based emissivity estimation.
  * Follows two-endmember mixing model:
- *   emissivity_vegetation = 0.987
- *   emissivity_soil = 0.971
- *   emissivity_water = 0.99 (from QA_PIXEL bit 7)
+ *   emissivity_vegetation = 0.982 (Rajan et al., 2022; https://doi.org/10.1007/s10661-022-09796-x)
+ *   emissivity_soil = 0.971 (Rajan et al., 2022; https://doi.org/10.1007/s10661-022-09796-x)
+ *   emissivity_water = 0.99 (Deng & Wu, 2013; https://doi.org/10.1016/j.rse.2012.12.020)
  * Proportional vegetation cover (Pv) derived from NDVI percentile normalization.
  */
 function addLocalEmissivity(img) {
@@ -492,7 +496,7 @@ function addLocalEmissivity(img) {
   var ndviMax = ee.Number(p.get('NDVI_p98'));
   var Pv = ndvi.unitScale(ndviMin, ndviMax).clamp(0, 1).pow(2).rename('PV');
 
-  var eps_v = 0.987, eps_s = 0.971;
+  var eps_v = 0.982, eps_s = 0.971;
   var emiss = Pv.multiply(eps_v)
     .add(ee.Image(1).subtract(Pv).multiply(eps_s))
     .rename('EMISSIVITY');
@@ -642,8 +646,9 @@ function addCovariates(img) {
 }
 
 // List of covariate band names used in model training/prediction
-var COVARIATES = ['NDVI', 'NDBI', 'BSI', 'MNDWI', 'ALBEDO', 'VV', 'VH', 'VV_VH_RATIO'];
-
+var COVARIATES_FULL = ['NDVI', 'NDBI', 'BSI', 'MNDWI', 'ALBEDO', 'VV', 'VH', 'VV_VH_RATIO'];
+var COVARIATES_OPTICAL = ['NDVI', 'NDBI', 'BSI', 'MNDWI', 'ALBEDO'];
+var COVARIATES = ABLATION_OPTICAL_ONLY ? COVARIATES_OPTICAL : COVARIATES_FULL;
 
 // ======================== SECTION 8: SATELLITE COLLECTIONS ===================
 
@@ -676,96 +681,8 @@ var sentinel1 = ee.ImageCollection('COPERNICUS/S1_GRD')
   .select(['VV', 'VH'])
   .filter(dryFilter);
 
-
-// ======================== SECTION 9: MODIS VALIDATION HELPER =================
-
-/** Build a MODIS Terra/Aqua LST composite for dates matching Landsat dry days */
-function buildModisComposite(collectionId, dateFilterList, regionGeom, targetCRS) {
-  var col = ee.ImageCollection(collectionId)
-    .filterDate(startDate, endDate)
-    .filterBounds(aoi)
-    .select(['LST_Day_1km', 'QC_Day'])
-    .map(function(img) {
-      var qc   = img.select('QC_Day');
-      var lstK = img.select('LST_Day_1km').multiply(0.02);
-      var lstC = lstK.subtract(273.15).rename('LST_C');
-      var qaMask = qc.bitwiseAnd(3).lte(1); // Best/good quality only
-
-      var result = img.addBands(lstC).updateMask(qaMask);
-
-      // Optional cloud buffer for MODIS
-      if (CLOUD_BUFFER_M > 0) {
-        var bad = qaMask.not();
-        var proj = img.select('LST_Day_1km').projection();
-        var nearBad = bad
-          .reproject({crs: proj})
-          .focal_max({
-            kernel: ee.Kernel.circle({radius: CLOUD_BUFFER_M, units: 'meters'}),
-            iterations: 1
-          });
-        var safe = nearBad.unmask(0).not();
-        result = result.updateMask(safe);
-      }
-      return result;
-    });
-
-  // Chain Landsat-dry-day date filters
-  var orFilter = ee.Algorithms.If(
-    dateFilterList.size().eq(0),
-    ee.Filter.eq('system:index', 'non_existent'),
-    dateFilterList.slice(1).iterate(function(f, acc) {
-      return ee.Filter.or(acc, f);
-    }, dateFilterList.get(0))
-  );
-
-  var filtered = col.filter(orFilter);
-  var comp = ee.Image(ee.Algorithms.If(USE_MEDIAN, filtered.median(), filtered.mean()))
-    .select('LST_C');
-  comp = comp.clip(clipRegion());
-  comp = comp.reproject({crs: targetCRS, scale: 1000});
-  return comp;
-}
-
-/** Compute RMSE, MAE, R² between aggregated Landsat LST and a MODIS composite */
-function rmseMaeR2(lsAggImg, lsBand, modisImg, diffName) {
-  var diff = lsAggImg.subtract(modisImg).rename(diffName);
-
-  var rmse = ee.Number(
-    diff.pow(2).reduceRegion({
-      reducer: ee.Reducer.mean(), geometry: aoi, scale: 1000, maxPixels: 1e13
-    }).get(diffName)
-  ).sqrt();
-
-  var mae = ee.Number(
-    diff.abs().reduceRegion({
-      reducer: ee.Reducer.mean(), geometry: aoi, scale: 1000, maxPixels: 1e13
-    }).get(diffName)
-  );
-
-  // Variance of residuals (diff) — use combined reducer so keys get suffixes
-  var diffStats = diff.reduceRegion({
-    reducer: ee.Reducer.variance(),
-    geometry: aoi, scale: 1000, maxPixels: 1e13, bestEffort: true
-  });
-  var varDiff = ee.Number(diffStats.get(diffName));  // standalone: no suffix
-
-  // Variance of observed (y)
-  var y = lsAggImg.updateMask(modisImg.mask());
-  var yStats = y.reduceRegion({
-    reducer: ee.Reducer.variance(),
-    geometry: aoi, scale: 1000, maxPixels: 1e13
-  });
-  var varY = ee.Number(yStats.get(lsBand));  // standalone: no suffix
-
-  // R² = 1 - Var(residuals) / Var(observed)
-  var r2 = ee.Number(1).subtract(varDiff.divide(varY));
-
-  return {rmse: rmse, mae: mae, r2: r2, diff: diff};
-}
-
-
 // =============================================================================
-// >>>  SECTION 9b: CLASSIFIER BUILDER & GRID SEARCH  <<<
+// >>>  SECTION 9: CLASSIFIER BUILDER & GRID SEARCH  <
 // =============================================================================
 
 /**
@@ -955,8 +872,8 @@ function runGridSearch(algorithm, trainData, testData, year) {
   }
 
   print('══════════════════════════════════════════════════');
-  print('GRID SEARCH — ' + algorithm + ' — ' + year +
-    ' — ' + grid.length + ' combinations');
+  print('GRID SEARCH - ' + algorithm + ' - ' + year +
+    ' - ' + grid.length + ' combinations');
   print('══════════════════════════════════════════════════');
 
   // Train and evaluate each combination
@@ -997,7 +914,7 @@ function runGridSearch(algorithm, trainData, testData, year) {
     yProperties: ['rmse']
   }).setChartType('ColumnChart')
     .setOptions({
-      title: 'Grid Search — ' + algorithm + ' — ' + year + ' — Test RMSE',
+      title: 'Grid Search - ' + algorithm + ' - ' + year + ' - Test RMSE',
       hAxis: {title: 'Parameter Combination', slantedText: true, slantedTextAngle: 45},
       vAxis: {title: 'RMSE (°C)'},
       legend: {position: 'none'},
@@ -1012,7 +929,7 @@ function runGridSearch(algorithm, trainData, testData, year) {
     yProperties: ['r2']
   }).setChartType('ColumnChart')
     .setOptions({
-      title: 'Grid Search — ' + algorithm + ' — ' + year + ' — Test R²',
+      title: 'Grid Search - ' + algorithm + ' - ' + year + ' - Test R²',
       hAxis: {title: 'Parameter Combination', slantedText: true, slantedTextAngle: 45},
       vAxis: {title: 'R²'},
       legend: {position: 'none'},
@@ -1023,7 +940,7 @@ function runGridSearch(algorithm, trainData, testData, year) {
 
 
 // =============================================================================
-// >>>  SECTION 9c: SCENE INFORMATION HELPER  <<<
+// >>>  SECTION 9b: SCENE INFORMATION HELPER  <
 // =============================================================================
 // Prints the number of scenes, acquisition dates, and times for each satellite
 // collection used in a given year. Useful for reproducibility and reporting.
@@ -1039,7 +956,7 @@ function runGridSearch(algorithm, trainData, testData, year) {
 function printSceneInfo(collection, sensorName, year) {
   var count = collection.size();
   print('────────────────────────────────────────');
-  print('Scene info — ' + sensorName + ' — ' + year + ' — count:', count);
+  print('Scene info - ' + sensorName + ' - ' + year + ' - count:', count);
 
   // Extract date-time strings from each image.
   // Use ee.Algorithms.If to guard against empty collections, because
@@ -1053,7 +970,7 @@ function printSceneInfo(collection, sensorName, year) {
     }),
     ee.List([])
   );
-  print('Scene info — ' + sensorName + ' — ' + year + ' — dates:', dateTimeList);
+  print('Scene info - ' + sensorName + ' - ' + year + ' - dates:', dateTimeList);
 }
 
 
@@ -1091,28 +1008,9 @@ function processSummerYear(year) {
   var corrLsComp = compCorr.updateMask(qualityMask).set('year', year)
     .clip(clipRegion());
 
-  // Build MODIS composites first (if not grid search)
-  var modisCompTerra = null;
-  var modisCompAqua = null;
-  if (!GRID_SEARCH_ENABLED) {
-    var lsDatesUnique = ee.List(stdLsCol.aggregate_array('system:time_start').distinct());
-    var dryDateFiltersModis = lsDatesUnique.map(function(t) {
-      var date = ee.Date(t);
-      return ee.Filter.date(date, date.advance(1, 'day'));
-    });
-    modisCompTerra = buildModisComposite(
-      'MODIS/061/MOD11A1', dryDateFiltersModis, aoi, PROJ_CRS);
-    modisCompAqua = buildModisComposite(
-      'MODIS/061/MYD11A1', dryDateFiltersModis, aoi, PROJ_CRS);
-    
-    // Add MODIS layers FIRST (will appear below LST 30m in panel)
-    Map.addLayer(modisCompTerra, VIS_LST, 'MODIS Terra LST 1 km — ' + year, false);
-    Map.addLayer(modisCompAqua, VIS_LST, 'MODIS Aqua LST 1 km — ' + year, false);
-  }
-
   // Add both LST composites to map
-  Map.addLayer(stdLsComp,  VIS_LST, 'Standard LST 30 m — ' + year, false);
-  Map.addLayer(corrLsComp, VIS_LST, 'Corrected LST 30 m — ' + year, false);
+  Map.addLayer(stdLsComp,  VIS_LST, 'Standard LST 30 m - ' + year, false);
+  Map.addLayer(corrLsComp, VIS_LST, 'Corrected LST 30 m - ' + year, false);
 
   // --- Exports: standard and corrected LST ---
   if (EXPORT_STD_LST_TO_DRIVE) {
@@ -1134,46 +1032,7 @@ function processSummerYear(year) {
     });
   }
 
-  // --- 10.2: MODIS validation ---
-  if (VALIDATE_MODIS && !GRID_SEARCH_ENABLED) {
-    var lsAggCorr = corrLsComp.reproject({crs: PROJ_CRS, scale: 30})
-      .reduceResolution({reducer: ee.Reducer.mean(), maxPixels: 1024, bestEffort: true})
-      .reproject({crs: PROJ_CRS, scale: 1000});
-
-    var statsCorrTerra = rmseMaeR2(lsAggCorr, 'LST_C_CORR', modisCompTerra, 'DIFF_TERRA');
-    var statsCorrAqua  = rmseMaeR2(lsAggCorr, 'LST_C_CORR', modisCompAqua,  'DIFF_AQUA');
-
-    print('MODIS validation — ' + year + ' — Terra RMSE/MAE/R²:',
-      statsCorrTerra.rmse, statsCorrTerra.mae, statsCorrTerra.r2);
-    print('MODIS validation — ' + year + ' — Aqua RMSE/MAE/R²:',
-      statsCorrAqua.rmse, statsCorrAqua.mae, statsCorrAqua.r2);
-  }
-  
-  // MODIS Exports (independent of validation)
-  if (!GRID_SEARCH_ENABLED) {
-    if (EXPORT_MODIS_TERRA_TO_DRIVE) {
-      Export.image.toDrive({
-        image: modisCompTerra,
-        description: 'MODIS_Terra_LST_Summer_' + year,
-        folder: 'LST_Downscaling',
-        fileNamePrefix: 'MODIS_Terra_LST_Summer_' + year,
-        region: clipRegion(), scale: 1000, maxPixels: 1e13, crs: PROJ_CRS
-      });
-    }
-    
-    if (EXPORT_MODIS_AQUA_TO_DRIVE) {
-      Export.image.toDrive({
-        image: modisCompAqua,
-        description: 'MODIS_Aqua_LST_Summer_' + year,
-        folder: 'LST_Downscaling',
-        fileNamePrefix: 'MODIS_Aqua_LST_Summer_' + year,
-        region: clipRegion(), scale: 1000, maxPixels: 1e13, crs: PROJ_CRS
-      });
-    }
-  }
-  
-  
-  // --- 10.3: Scene information (counts, dates, times) ---
+  // --- 10.2: Scene information (counts, dates, times) ---
   if (PRINT_SCENE_INFO) {
     // Split Landsat into L8 and L9 for separate reporting
     var ls8Year = lsColFiltered
@@ -1183,36 +1042,41 @@ function processSummerYear(year) {
 
     var sentFiltered_info = sentinel
       .filter(ee.Filter.calendarRange(year, year, 'year'));
-    var sent1Filtered_info = sentinel1
-      .filter(ee.Filter.calendarRange(year, year, 'year'));
 
     print('========================================');
-    print('SCENE INFORMATION — ' + year);
+    print('SCENE INFORMATION - ' + year);
     print('========================================');
     printSceneInfo(ls8Year,           'Landsat 8',   year);
     printSceneInfo(ls9Year,           'Landsat 9',   year);
     printSceneInfo(sentFiltered_info, 'Sentinel-2',  year);
-    printSceneInfo(sent1Filtered_info,'Sentinel-1',  year);
+    if (!ABLATION_OPTICAL_ONLY) {
+      var sent1Filtered_info = sentinel1
+        .filter(ee.Filter.calendarRange(year, year, 'year'));
+      printSceneInfo(sent1Filtered_info,'Sentinel-1',  year);
+    }
   }
 
-  // --- 10.4: Sentinel-2 (filtering by year) ---
+  // --- 10.3: Sentinel-2 (filtering by year) ---
   var sentFiltered = sentinel.filter(ee.Filter.calendarRange(year, year, 'year'));
 
-  // --- 10.5: Sentinel-1 SAR composites ---
-  var sent1Filtered = sentinel1.filter(ee.Filter.calendarRange(year, year, 'year'));
+  // --- 10.4: Sentinel-1 SAR composites (skipped in ablation mode) ---
+  var vv, vh, vv_vh_ratio;
+  if (!ABLATION_OPTICAL_ONLY) {
+    var sent1Filtered = sentinel1.filter(ee.Filter.calendarRange(year, year, 'year'));
 
-  var sortedSent1 = sent1Filtered.sort('system:time_start');
-  var sent1List = sortedSent1.toList(sortedSent1.size());
-  var subsampleIndices = ee.List.sequence(0, sortedSent1.size().subtract(1), S1_SUBSAMPLE_STEP);
-  var subsampledSent1 = ee.ImageCollection(subsampleIndices.map(function(i) {
-    return ee.Image(sent1List.get(i));
-  }));
+    var sortedSent1 = sent1Filtered.sort('system:time_start');
+    var sent1List = sortedSent1.toList(sortedSent1.size());
+    var subsampleIndices = ee.List.sequence(0, sortedSent1.size().subtract(1), S1_SUBSAMPLE_STEP);
+    var subsampledSent1 = ee.ImageCollection(subsampleIndices.map(function(i) {
+      return ee.Image(sent1List.get(i));
+    }));
 
-  var vv = subsampledSent1.select('VV').mean().rename('VV');
-  var vh = subsampledSent1.select('VH').mean().rename('VH');
-  var vv_vh_ratio = vv.subtract(vh).rename('VV_VH_RATIO');
+    vv = subsampledSent1.select('VV').mean().rename('VV');
+    vh = subsampledSent1.select('VH').mean().rename('VH');
+    vv_vh_ratio = vv.subtract(vh).rename('VV_VH_RATIO');
+  }
 
-  // --- 10.6: Downscaling ---
+  // --- 10.5: Downscaling ---
   var sentMean = sentFiltered.mean().clip(aoi);
 
   // Coarse LST for training
@@ -1225,8 +1089,11 @@ function processSummerYear(year) {
     .reproject({crs: PROJ_CRS, scale: COARSE_SCALE});
 
   // Coarse covariates
-  var coarseCov = addCovariates(sentMean)
-    .addBands([vv, vh, vv_vh_ratio])
+  var coarseCov = addCovariates(sentMean);
+  if (!ABLATION_OPTICAL_ONLY) {
+    coarseCov = coarseCov.addBands([vv, vh, vv_vh_ratio]);
+  }
+  coarseCov = coarseCov
     .reproject({crs: PROJ_CRS, scale: FINE_SCALE})
     .reduceResolution({
       reducer: ee.Reducer.mean(), maxPixels: 1024, bestEffort: true
@@ -1250,7 +1117,7 @@ function processSummerYear(year) {
   var testData  = fullDataWithRandom.filter(ee.Filter.gte('random', 0.7));
 
   if (PRINT_MODEL_STATS) {
-    print('Sample sizes — ' + year + ' — train / test:', trainData.size(), testData.size());
+    print('Sample sizes - ' + year + ' - train / test:', trainData.size(), testData.size());
   }
   if (SHOW_TRAIN_TEST_POINTS) {
     Map.addLayer(trainData, {color: 'blue'}, 'Train ' + year);
@@ -1258,7 +1125,7 @@ function processSummerYear(year) {
   }
 
   // =========================================================================
-  // >>>  10.7: GRID SEARCH (conditional)  <<<
+  // >>>  10.6: GRID SEARCH (conditional)  <<<
   // =========================================================================
   if (GRID_SEARCH_ENABLED) {
     runGridSearch(ALGORITHM, trainData, testData, year);
@@ -1269,7 +1136,7 @@ function processSummerYear(year) {
   }
 
   // =========================================================================
-  // >>>  10.8: MODEL TRAINING (uses buildClassifier for selected algorithm)  <<<
+  // >>>  10.7: MODEL TRAINING (uses buildClassifier for selected algorithm)  <<<
   // =========================================================================
   var classifier = buildClassifier(ALGORITHM).train({
     features: trainData,
@@ -1320,23 +1187,25 @@ function processSummerYear(year) {
         seed: SEED
       });
     }
-    print(ALGORITHM + ' hyperparameters — ' + year + ':', hpDict);
+    print(ALGORITHM + ' hyperparameters - ' + year + ':', hpDict);
   }
 
   // Variable importance (tree-based only: GBT, RF, CART)
   if (PRINT_IMPORTANCE && ALGORITHM !== 'SVM') {
-    print('Variable importance — ' + ALGORITHM + ' — ' + year + ':',
+    print('Variable importance - ' + ALGORITHM + ' - ' + year + ':',
       classifier.explain().get('importance'));
   }
 
-  // --- 10.9: Fine-resolution prediction ---
-  var fineCov = addCovariates(sentMean)
-    .addBands([vv, vh, vv_vh_ratio]);
+  // --- 10.8: Fine-resolution prediction ---
+  var fineCov = addCovariates(sentMean);
+  if (!ABLATION_OPTICAL_ONLY) {
+    fineCov = fineCov.addBands([vv, vh, vv_vh_ratio]);
+  }
   fineCov = fineCov.clip(clipRegion());
 
   var downscaledRaw = fineCov.classify(classifier, 'LST_C_DS');
 
-  // --- 10.10: Residual correction ---
+  // --- 10.9: Residual correction ---
   var predictedCoarse = coarseCov.classify(classifier, 'LST_C_DS');
   var residualCoarse = coarseLST.subtract(predictedCoarse).rename('RESIDUAL');
 
@@ -1349,18 +1218,21 @@ function processSummerYear(year) {
     .rename('LST_C_DS')
     .clip(clipRegion())
     .set('year', year)
-    .set('algorithm', ALGORITHM);
+    .set('algorithm', ALGORITHM)
+    .set('ablation_optical_only', ABLATION_OPTICAL_ONLY);
   
+  var ablationLabel = ABLATION_OPTICAL_ONLY ? ', Optical Only' : '';
   Map.addLayer(downscaledLST, VIS_LST,
-    'Downscaled LST 10 m (' + ALGORITHM + ') — ' + year, false);
+    'Downscaled LST 10 m (' + ALGORITHM + ablationLabel + ') - ' + year, false);
 
-  // --- 10.11: Exports ---
+  // --- 10.10: Exports ---
   if (EXPORT_DOWNSCALED_TO_DRIVE) {
+    var ablationTag = ABLATION_OPTICAL_ONLY ? '_OpticalOnly' : '_Full';
     Export.image.toDrive({
       image: downscaledLST,
-      description: 'Downscaled_LST_' + ALGORITHM + '_' + INDEX_STRATEGY + '_Summer_' + year,
+      description: 'Downscaled_LST_' + ALGORITHM + '_' + INDEX_STRATEGY + ablationTag + '_Summer_' + year,
       folder: 'LST_Downscaling',
-      fileNamePrefix: 'Downscaled_LST_' + ALGORITHM + '_' + INDEX_STRATEGY + '_Summer_' + year,
+      fileNamePrefix: 'Downscaled_LST_' + ALGORITHM + '_' + INDEX_STRATEGY + ablationTag + '_Summer_' + year,
       region: clipRegion(), scale: FINE_SCALE, maxPixels: 1e13, crs: PROJ_CRS
     });
   }
@@ -1379,18 +1251,18 @@ function processSummerYear(year) {
     });
   }
 
-  // --- 10.12: Accuracy assessment ---
+  // --- 10.11: Accuracy assessment ---
   var metrics = evaluateModel(classifier, testData);
 
   // Train metrics (for overfitting check)
   var metricsTrain = evaluateModel(classifier, trainData);
 
   if (PRINT_MODEL_STATS) {
-    print(ALGORITHM + ' test metrics — ' + year + ':', ee.Dictionary({
+    print(ALGORITHM + ' test metrics - ' + year + ':', ee.Dictionary({
       rmse_test: metrics.rmse, mae_test: metrics.mae, r2_test: metrics.r2
     }));
-    print(ALGORITHM + ' train RMSE — ' + year + ':', metricsTrain.rmse);
-    print(ALGORITHM + ' ΔRMSE (test − train) — ' + year + ':',
+    print(ALGORITHM + ' train RMSE - ' + year + ':', metricsTrain.rmse);
+    print(ALGORITHM + ' ΔRMSE (test - train) - ' + year + ':',
       metrics.rmse.subtract(metricsTrain.rmse));
   }
 }
@@ -1401,13 +1273,14 @@ if (GRID_SEARCH_ENABLED) {
   // Grid search runs on the GRID_SEARCH_YEAR only to save compute.
   // After finding best params, switch GRID_SEARCH_ENABLED = false to run all years.
   print('┌─────────────────────────────────────────────────┐');
-  print('│  GRID SEARCH MODE — running for year ' + GRID_SEARCH_YEAR  + ' only  │');
+  print('│  GRID SEARCH MODE - running for year ' + GRID_SEARCH_YEAR  + ' only  │');
   print('│  Algorithm: ' + ALGORITHM + '                                │');
   print('│  Set GRID_SEARCH_ENABLED = false after tuning   │');
   print('└─────────────────────────────────────────────────┘');
   processSummerYear(GRID_SEARCH_YEAR);
 } else {
   print('Algorithm: ' + ALGORITHM);
+  print('Ablation mode: ' + (ABLATION_OPTICAL_ONLY ? 'Optical only (no SAR)' : 'Full (optical + SAR)'));
   YEARS.forEach(function(y) {
     processSummerYear(y);
   });
@@ -1428,7 +1301,7 @@ function addLSTLegend() {
   });
 
   legend.add(ui.Label({
-    value: 'LST (°C) — ' + ALGORITHM,
+    value: 'LST (°C) - ' + ALGORITHM,
     style: {fontWeight: 'bold', fontSize: '16px', margin: '0 0 4px 0'}
   }));
 
