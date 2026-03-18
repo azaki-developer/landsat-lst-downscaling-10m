@@ -36,7 +36,7 @@ If you use this code in your research, please cite:
   year         = 2026,
   publisher    = {Zenodo},
   version      = {2.0.0},
-  doi          = {10.5281/zenodo.18694471},
+  doi          = {10.5281/zenodo.18526671},
   url          = {https://doi.org/10.5281/zenodo.18526671},
   keywords     = {land surface temperature, downscaling, Google Earth Engine, 
                   machine learning, Landsat, Sentinel-2, remote sensing},
@@ -434,4 +434,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Last Updated:** 18.03.2026  
 **Version:** 2.0.0  
-**DOI:** [10.5281/zenodo.18694471](https://doi.org/10.5281/zenodo.18526671)
+**DOI:** [10.5281/zenodo.18526671](https://doi.org/10.5281/zenodo.18526671)
