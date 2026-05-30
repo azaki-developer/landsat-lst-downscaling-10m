@@ -1,9 +1,4 @@
 # Landsat LST Downscaling to 10m Resolution
-
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18526671.svg)](https://doi.org/10.5281/zenodo.18526671)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Google Earth Engine](https://img.shields.io/badge/Google%20Earth%20Engine-Code-blue)](https://earthengine.google.com/)
-
 ## Overview
 
 This repository contains a Google Earth Engine (GEE) framework for downscaling Landsat 8/9 Land Surface Temperature (LST) from 30 m to 10 m spatial resolution using machine learning and multi-source satellite data.
@@ -17,33 +12,6 @@ This repository contains a Google Earth Engine (GEE) framework for downscaling L
 - Residual correction for thermal consistency
 - Built-in hyperparameter grid search (2D or 3D parameter sweeps)
 - Batch processing for multi-year analysis
-
-## Citation
-
-If you use this code in your research, please cite:
-```bibtex
-[Manuscript submitted for publication / under review]
-
-```
-
-**Code Citation:**
-```bibtex
-@software{zaki2026lst,
-  author       = {Zaki, Abdurrahman},
-  title        = {Landsat LST Downscaling Framework (10m): 
-                  Multi-Algorithm Implementation in Google Earth Engine},
-  month        = mar,
-  year         = 2026,
-  publisher    = {Zenodo},
-  version      = {2.0.0},
-  doi          = {10.5281/zenodo.18526671},
-  url          = {https://doi.org/10.5281/zenodo.18526671},
-  keywords     = {land surface temperature, downscaling, Google Earth Engine, 
-                  machine learning, Landsat, Sentinel-2, remote sensing},
-  license      = {MIT},
-  note         = {Source code: \url{https://github.com/azaki-developer/landsat-lst-downscaling-10m}}
-}
-```
 
 ## Requirements
 
